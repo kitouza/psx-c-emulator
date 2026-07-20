@@ -1,0 +1,10 @@
+# Compiled output
+psx-emulator
+build/
+*.o
+
+# PlayStation BIOS/ROM files
+roms/*.bin
+
+# macOS
+.DS_Store
