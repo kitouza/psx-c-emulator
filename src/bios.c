@@ -22,6 +22,10 @@ bool bios_init(Bios* bios, const char* filename) {
 
 }
 
+u8 bios_load8(const Bios* bios, u32 offset) {
+    return bios->data[offset];
+}
+
 u32 bios_load32(const Bios* bios, u32 offset) {
 
     // Grab 4 individual bytes from data array
