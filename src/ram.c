@@ -13,6 +13,13 @@ u8 ram_load8(const Ram* ram, u32 offset) {
     return ram->data[offset];
 }
 
+u16 ram_load16(const Ram* ram, u32 offset) {
+    u8 b0 = ram->data[offset + 0];
+    u8 b1 = ram->data[offset + 1];
+
+    return (u16)b0 | ((u16)b1 << 8);
+}
+
 u32 ram_load32(const Ram* ram, u32 offset) {
 
     // Grab 4 individual bytes from data array
@@ -40,6 +47,17 @@ void ram_store32(Ram* ram, u32 offset, u32 val) {
     ram->data[offset + 1] = b1;
     ram->data[offset + 2] = b2;
     ram->data[offset + 3] = b3;
+
+}
+
+void ram_store16(Ram* ram, u32 offset, u16 val) {
+
+    // Grab 2 individual bytes from val
+    u8 b0 = val;
+    u8 b1 = val >> 8;
+
+    ram->data[offset + 0] = b0;
+    ram->data[offset + 1] = b1;
 
 }
 
