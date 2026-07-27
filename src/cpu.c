@@ -42,7 +42,9 @@ void cpu_run_next_instruction(Cpu* cpu) {
         return;
     }
 
-    Instruction instruction = (Instruction){cpu_load32(cpu, cpu->pc)};
+    Instruction instruction = (Instruction){
+        cpu_load(cpu, cpu->pc, ACCESS_WORD)
+    };
 
     // Keep one PC ahead so branches execute the following delay-slot instruction.
     cpu->pc = cpu->next_pc;
@@ -66,28 +68,17 @@ void cpu_run_next_instruction(Cpu* cpu) {
 
 // store/load funcs
 
-u32 cpu_load32(Cpu* cpu, u32 addr) {
-    return interconnect_load32(cpu->inter, addr);
+u32 cpu_load(Cpu* cpu, u32 addr, AccessWidth width) {
+    return interconnect_load(cpu->inter, addr, width);
 }
 
-u16 cpu_load16(Cpu* cpu, u32 addr) {
-    return interconnect_load16(cpu->inter, addr);
-}
+void cpu_store(Cpu* cpu, u32 addr, u32 val, AccessWidth width) {
+    if ((cpu->sr & 0x10000) != 0) {
+        fprintf(stderr, "Ignoring store while cache is isolated\n");
+        return;
+    }
 
-u8 cpu_load8(Cpu* cpu, u32 addr) {
-    return interconnect_load8(cpu->inter, addr);
-}
-
-void cpu_store32(Cpu* cpu, u32 addr, u32 val) {
-    interconnect_store32(cpu->inter, addr, val);
-}
-
-void cpu_store16(Cpu* cpu, u32 addr, u16 val) {
-    interconnect_store16(cpu->inter, addr, val);
-}
-
-void cpu_store8(Cpu* cpu, u32 addr, u8 val) {
-    interconnect_store8(cpu->inter, addr, val);
+    interconnect_store(cpu->inter, addr, val, width);
 }
 // register funcs
 
@@ -264,18 +255,12 @@ void op_nor(Cpu* cpu, Instruction instruction) {
 }
 
 void op_lw(Cpu* cpu, Instruction instruction) {
-    if ((cpu->sr & 0x10000) != 0) {
-        //isolated cache, do not load memory
-        fprintf(stderr, "Ignoring load while cache is isolated\n");
-        return;
-    }
-
     u32 i = instruction_imm_se(instruction);
     RegisterIndex t = instruction_t(instruction);
     RegisterIndex s = instruction_s(instruction);
 
     u32 addr = load_reg(cpu, s) + i;
-    u32 v = cpu_load32(cpu, addr);
+    u32 v = cpu_load(cpu, addr, ACCESS_WORD);
 
     cpu->load = (PendingLoad){
         .reg = t,
@@ -290,7 +275,7 @@ void op_lwl(Cpu* cpu, Instruction instruction) {
 
     u32 addr = load_reg(cpu, s) + i;
     u32 current = cpu->out_regs[t.value];
-    u32 word = cpu_load32(cpu, addr & ~3u);
+    u32 word = cpu_load(cpu, addr & ~3u, ACCESS_WORD);
     u32 v;
 
     switch (addr & 3) {
@@ -311,7 +296,7 @@ void op_lwr(Cpu* cpu, Instruction instruction) {
 
     u32 addr = load_reg(cpu, s) + i;
     u32 current = cpu->out_regs[t.value];
-    u32 word = cpu_load32(cpu, addr & ~3u);
+    u32 word = cpu_load(cpu, addr & ~3u, ACCESS_WORD);
     u32 v;
 
     switch (addr & 3) {
@@ -331,7 +316,7 @@ void op_lb(Cpu* cpu, Instruction instruction) {
     RegisterIndex s = instruction_s(instruction);
 
     u32 addr = load_reg(cpu, s) + i;
-    u32 v = (u32)(i32)(i8)cpu_load8(cpu, addr);
+    u32 v = (u32)(i32)(i8)cpu_load(cpu, addr, ACCESS_BYTE);
 
     cpu->load = (PendingLoad){
         .reg = t,
@@ -345,7 +330,7 @@ void op_lbu(Cpu* cpu, Instruction instruction) {
     RegisterIndex s = instruction_s(instruction);
 
     u32 addr = load_reg(cpu, s) + i;
-    u8 v = cpu_load8(cpu, addr);
+    u8 v = (u8)cpu_load(cpu, addr, ACCESS_BYTE);
 
     cpu->load = (PendingLoad){
         .reg = t,
@@ -365,7 +350,7 @@ void op_lh(Cpu* cpu, Instruction instruction) {
         return;
     }
 
-    u32 v = (u32)(i32)(i16)cpu_load16(cpu, addr);
+    u32 v = (u32)(i32)(i16)cpu_load(cpu, addr, ACCESS_HALFWORD);
     cpu->load = (PendingLoad){
         .reg = t,
         .value = v
@@ -383,7 +368,7 @@ void op_lhu(Cpu* cpu, Instruction instruction) {
         return;
     }
 
-    u16 v = cpu_load16(cpu, addr);
+    u16 v = (u16)cpu_load(cpu, addr, ACCESS_HALFWORD);
     cpu->load = (PendingLoad){
         .reg = t,
         .value = v
@@ -391,13 +376,6 @@ void op_lhu(Cpu* cpu, Instruction instruction) {
 }
 
 void op_sw(Cpu* cpu, Instruction instruction) {
-
-    if ((cpu->sr & 0x10000) != 0) {
-        //isolated cache, do not write to memory
-        fprintf(stderr, "Ignoring store while cache is isolated\n");
-        return;
-    }
-
     u32 i = instruction_imm_se(instruction);
     RegisterIndex t = instruction_t(instruction);
     RegisterIndex s = instruction_s(instruction);
@@ -405,15 +383,10 @@ void op_sw(Cpu* cpu, Instruction instruction) {
     u32 addr = load_reg(cpu, s) + i;
     u32 v = load_reg(cpu, t);
 
-    cpu_store32(cpu, addr, v);
+    cpu_store(cpu, addr, v, ACCESS_WORD);
 }
 
 void op_swl(Cpu* cpu, Instruction instruction) {
-    if ((cpu->sr & 0x10000) != 0) {
-        fprintf(stderr, "Ignoring store while cache is isolated\n");
-        return;
-    }
-
     u32 i = instruction_imm_se(instruction);
     RegisterIndex t = instruction_t(instruction);
     RegisterIndex s = instruction_s(instruction);
@@ -421,7 +394,7 @@ void op_swl(Cpu* cpu, Instruction instruction) {
     u32 addr = load_reg(cpu, s) + i;
     u32 aligned_addr = addr & ~3u;
     u32 v = load_reg(cpu, t);
-    u32 current = cpu_load32(cpu, aligned_addr);
+    u32 current = cpu_load(cpu, aligned_addr, ACCESS_WORD);
     u32 word;
 
     switch (addr & 3) {
@@ -432,15 +405,10 @@ void op_swl(Cpu* cpu, Instruction instruction) {
         default: abort();
     }
 
-    cpu_store32(cpu, aligned_addr, word);
+    cpu_store(cpu, aligned_addr, word, ACCESS_WORD);
 }
 
 void op_swr(Cpu* cpu, Instruction instruction) {
-    if ((cpu->sr & 0x10000) != 0) {
-        fprintf(stderr, "Ignoring store while cache is isolated\n");
-        return;
-    }
-
     u32 i = instruction_imm_se(instruction);
     RegisterIndex t = instruction_t(instruction);
     RegisterIndex s = instruction_s(instruction);
@@ -448,7 +416,7 @@ void op_swr(Cpu* cpu, Instruction instruction) {
     u32 addr = load_reg(cpu, s) + i;
     u32 aligned_addr = addr & ~3u;
     u32 v = load_reg(cpu, t);
-    u32 current = cpu_load32(cpu, aligned_addr);
+    u32 current = cpu_load(cpu, aligned_addr, ACCESS_WORD);
     u32 word;
 
     switch (addr & 3) {
@@ -459,15 +427,10 @@ void op_swr(Cpu* cpu, Instruction instruction) {
         default: abort();
     }
 
-    cpu_store32(cpu, aligned_addr, word);
+    cpu_store(cpu, aligned_addr, word, ACCESS_WORD);
 }
 
 void op_sh(Cpu* cpu, Instruction instruction) {
-    if ((cpu->sr & 0x10000) != 0) {
-        fprintf(stderr, "Ignoring store while cache is isolated\n");
-        return;
-    }
-
     u32 i = instruction_imm_se(instruction);
     RegisterIndex t = instruction_t(instruction);
     RegisterIndex s = instruction_s(instruction);
@@ -475,15 +438,10 @@ void op_sh(Cpu* cpu, Instruction instruction) {
     u32 addr = load_reg(cpu, s) + i;
     u16 v = (u16)load_reg(cpu, t);
 
-    cpu_store16(cpu, addr, v);
+    cpu_store(cpu, addr, v, ACCESS_HALFWORD);
 }
 
 void op_sb(Cpu* cpu, Instruction instruction) {
-    if ((cpu->sr & 0x10000) != 0) {
-        fprintf(stderr, "Ignoring store while cache is isolated\n");
-        return;
-    }
-
     u32 i = instruction_imm_se(instruction);
     RegisterIndex t = instruction_t(instruction);
     RegisterIndex s = instruction_s(instruction);
@@ -491,7 +449,7 @@ void op_sb(Cpu* cpu, Instruction instruction) {
     u32 addr = load_reg(cpu, s) + i;
     u8 v = (u8)load_reg(cpu, t);
 
-    cpu_store8(cpu, addr, v);
+    cpu_store(cpu, addr, v, ACCESS_BYTE);
 }
 
 void op_sll(Cpu* cpu, Instruction instruction) {

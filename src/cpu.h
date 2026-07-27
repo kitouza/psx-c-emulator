@@ -39,12 +39,8 @@ typedef enum {
 
 void cpu_init(Cpu* cpu, Interconnect* inter);
 void cpu_run_next_instruction(Cpu* cpu);
-u32 cpu_load32(Cpu* cpu, u32 addr);
-u16 cpu_load16(Cpu* cpu, u32 addr);
-u8 cpu_load8(Cpu* cpu, u32 addr);
-void cpu_store32(Cpu* cpu, u32 addr, u32 val);
-void cpu_store16(Cpu* cpu, u32 addr, u16 val);
-void cpu_store8(Cpu* cpu, u32 addr, u8 val);
+u32 cpu_load(Cpu* cpu, u32 addr, AccessWidth width);
+void cpu_store(Cpu* cpu, u32 addr, u32 val, AccessWidth width);
 u32 load_reg(Cpu* cpu, RegisterIndex index);
 void set_reg(Cpu* cpu, RegisterIndex index, u32 val);
 void branch(Cpu* cpu, u32 offset);

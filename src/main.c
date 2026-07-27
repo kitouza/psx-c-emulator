@@ -8,14 +8,23 @@ int main(void) {
     }
 
     Interconnect inter;
-    interconnect_init(&inter, &bios);
+    if (!interconnect_init(&inter, &bios)) {
+        return 1;
+    }
 
     Cpu cpu;
     cpu_init(&cpu, &inter);
 
-    while(true) {
-        cpu_run_next_instruction(&cpu);
+    bool running = true;
+    while (running) {
+        // Process events regularly so macOS can display and update the window.
+        for (u32 i = 0; i < 10000; ++i) {
+            cpu_run_next_instruction(&cpu);
+        }
+
+        running = renderer_handle_events(&inter.gpu.renderer);
     }
 
+    interconnect_destroy(&inter);
     return 0;
 }

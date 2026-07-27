@@ -1,10 +1,37 @@
-# Compiled output
-psx-emulator
-build/
+# Build directories
+/build/
+/cmake-build-*/
+
+# CMake-generated files (for accidental in-source builds)
+/CMakeCache.txt
+/CMakeFiles/
+/cmake_install.cmake
+/compile_commands.json
+/Makefile.cmake
+
+# Compiler and linker output
+/psx-emulator
 *.o
+*.obj
+*.a
+*.dylib
+*.so
+*.dSYM/
 
 # PlayStation BIOS/ROM files
-roms/*.bin
+/roms/*.bin
+/roms/*.iso
+/roms/*.cue
+/roms/*.chd
+
+# Local editor configuration
+/.idea/
+/.vscode/
+*.swp
+*.swo
 
 # macOS
 .DS_Store
+
+# notes
+DIVERGENCES.md

@@ -1,6 +1,7 @@
 #ifndef GPU_H
 #define GPU_H
 
+#include "renderer.h"
 #include "types.h"
 
 typedef enum {
@@ -101,9 +102,11 @@ typedef struct {
     u32 gp0_words_remaining;
     GpuCommand gp0_command;
     GpuGp0Mode gp0_mode;
+    Renderer renderer;
 } Gpu;
 
-void gpu_init(Gpu* gpu);
+bool gpu_init(Gpu* gpu);
+void gpu_destroy(Gpu* gpu);
 u32 gpu_read(const Gpu* gpu);
 u32 gpu_status(const Gpu* gpu);
 bool gpu_gp0(Gpu* gpu, u32 val);

@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
-void gpu_init(Gpu* gpu) {
+bool gpu_init(Gpu* gpu) {
     memset(gpu, 0, sizeof(Gpu));
     gpu->texture_depth = GPU_TEXTURE_DEPTH_4_BIT;
     gpu->field = GPU_FIELD_TOP;
@@ -13,6 +13,11 @@ void gpu_init(Gpu* gpu) {
     gpu->display_depth = GPU_DISPLAY_DEPTH_15_BIT;
     gpu->display_disabled = true;
     gpu->dma_direction = GPU_DMA_OFF;
+    return renderer_init(&gpu->renderer);
+}
+
+void gpu_destroy(Gpu* gpu) {
+    renderer_destroy(&gpu->renderer);
 }
 
 u32 gpu_read(const Gpu* gpu) {
@@ -71,6 +76,21 @@ u32 gpu_status(const Gpu* gpu) {
     return status;
 }
 
+Position position_from_gp0(u32 value) {
+    return (Position) {
+        .x = (i16)(value & 0xffff),
+        .y = (i16)(value >> 16)
+    };
+}
+
+Color color_from_gp0(u32 value) {
+    return (Color) {
+        .r = (u8)(value),
+        .g = (u8)(value >> 8),
+        .b = (u8)(value >> 16)
+    };
+}
+
 static void gpu_reset_command_buffer(Gpu* gpu) {
     gpu->gp0_command_length = 0;
     gpu->gp0_words_remaining = 0;
@@ -118,11 +138,14 @@ static void gpu_gp0_drawing_area_bottom_right(Gpu* gpu) {
     gpu->drawing_area_bottom = (val >> 10) & 0x03ff;
 }
 
-static void gpu_gp0_drawing_offset(Gpu* gpu) {
+static bool gpu_gp0_drawing_offset(Gpu* gpu) {
     u16 x = gpu->gp0_command_buffer[0] & 0x07ff;
     u16 y = (gpu->gp0_command_buffer[0] >> 11) & 0x07ff;
     gpu->drawing_x_offset = (i16)(x << 5) >> 5;
     gpu->drawing_y_offset = (i16)(y << 5) >> 5;
+
+    // Temporary frame boundary until GPU timing and VSYNC are emulated.
+    return renderer_display(&gpu->renderer);
 }
 
 static void gpu_gp0_mask_bit_setting(Gpu* gpu) {
@@ -160,23 +183,76 @@ static void gpu_gp0_image_store(const Gpu* gpu) {
             resolution >> 16);
 }
 
+static bool gp0_triangle_shaded_opaque(Gpu* gpu) {
+    Position positions[3] = {
+        position_from_gp0(gpu->gp0_command_buffer[1]),
+        position_from_gp0(gpu->gp0_command_buffer[3]),
+        position_from_gp0(gpu->gp0_command_buffer[5])
+    };
+    Color colors[3] = {
+        color_from_gp0(gpu->gp0_command_buffer[0]),
+        color_from_gp0(gpu->gp0_command_buffer[2]),
+        color_from_gp0(gpu->gp0_command_buffer[4])
+    };
+
+    return renderer_push_triangle(&gpu->renderer, positions, colors);
+}
+
+static bool gpu_gp0_quad_mono_opaque(Gpu* gpu) {
+    Position positions[4] = {
+        position_from_gp0(gpu->gp0_command_buffer[1]),
+        position_from_gp0(gpu->gp0_command_buffer[2]),
+        position_from_gp0(gpu->gp0_command_buffer[3]),
+        position_from_gp0(gpu->gp0_command_buffer[4])
+    };
+    Color color = color_from_gp0(gpu->gp0_command_buffer[0]);
+    Color colors[4] = { color, color, color, color };
+    return renderer_push_quad(&gpu->renderer, positions, colors);
+}
+
+static bool gpu_gp0_quad_shaded_opaque(Gpu* gpu) {
+    Position positions[4] = {
+        position_from_gp0(gpu->gp0_command_buffer[1]),
+        position_from_gp0(gpu->gp0_command_buffer[3]),
+        position_from_gp0(gpu->gp0_command_buffer[5]),
+        position_from_gp0(gpu->gp0_command_buffer[7])
+    };
+    Color colors[4] = {
+        color_from_gp0(gpu->gp0_command_buffer[0]),
+        color_from_gp0(gpu->gp0_command_buffer[2]),
+        color_from_gp0(gpu->gp0_command_buffer[4]),
+        color_from_gp0(gpu->gp0_command_buffer[6])
+    };
+    return renderer_push_quad(&gpu->renderer, positions, colors);
+}
+
+static bool gpu_gp0_quad_texture_blend_opaque(Gpu* gpu) {
+    Position positions[4] = {
+        position_from_gp0(gpu->gp0_command_buffer[1]),
+        position_from_gp0(gpu->gp0_command_buffer[3]),
+        position_from_gp0(gpu->gp0_command_buffer[5]),
+        position_from_gp0(gpu->gp0_command_buffer[7])
+    };
+
+    // Textures are not implemented yet; use the guide's solid red fallback.
+    Color red = { .r = 0x80, .g = 0, .b = 0 };
+    Color colors[4] = { red, red, red, red };
+    return renderer_push_quad(&gpu->renderer, positions, colors);
+}
+
 static bool gpu_execute_gp0_command(Gpu* gpu) {
     switch (gpu->gp0_command) {
         case GPU_COMMAND_NOP:
         case GPU_COMMAND_CLEAR_CACHE:
             return true;
         case GPU_COMMAND_MONO_QUAD:
-            fprintf(stderr, "GPU draw monochrome quadrilateral\n");
-            return true;
+            return gpu_gp0_quad_mono_opaque(gpu);
         case GPU_COMMAND_TEXTURED_QUAD:
-            fprintf(stderr, "GPU draw textured blended quadrilateral\n");
-            return true;
+            return gpu_gp0_quad_texture_blend_opaque(gpu);
         case GPU_COMMAND_SHADED_TRIANGLE:
-            fprintf(stderr, "GPU draw shaded triangle\n");
-            return true;
+            return gp0_triangle_shaded_opaque(gpu);
         case GPU_COMMAND_SHADED_QUAD:
-            fprintf(stderr, "GPU draw shaded quadrilateral\n");
-            return true;
+            return gpu_gp0_quad_shaded_opaque(gpu);
         case GPU_COMMAND_IMAGE_LOAD:
             return gpu_gp0_image_load(gpu);
         case GPU_COMMAND_IMAGE_STORE:
@@ -194,8 +270,7 @@ static bool gpu_execute_gp0_command(Gpu* gpu) {
             gpu_gp0_drawing_area_bottom_right(gpu);
             return true;
         case GPU_COMMAND_DRAWING_OFFSET:
-            gpu_gp0_drawing_offset(gpu);
-            return true;
+            return gpu_gp0_drawing_offset(gpu);
         case GPU_COMMAND_MASK_BIT_SETTING:
             gpu_gp0_mask_bit_setting(gpu);
             return true;

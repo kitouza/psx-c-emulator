@@ -4,25 +4,23 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef u32 (*Load32Fn)(Interconnect* inter, u32 offset);
-typedef u16 (*Load16Fn)(Interconnect* inter, u32 offset);
-typedef u8 (*Load8Fn)(Interconnect* inter, u32 offset);
-typedef void (*Store32Fn)(Interconnect* inter, u32 offset, u32 val);
-typedef void (*Store16Fn)(Interconnect* inter, u32 offset, u16 val);
-typedef void (*Store8Fn)(Interconnect* inter, u32 offset, u8 val);
+typedef u32 (*LoadFn)(Interconnect* inter, u32 offset, AccessWidth width);
+typedef void (*StoreFn)(Interconnect* inter,
+                        u32 offset,
+                        u32 val,
+                        AccessWidth width);
 
 typedef struct {
     u32 start;
     u32 size;
-    Load32Fn load32;
-    Load16Fn load16;
-    Load8Fn load8;
-    Store32Fn store32;
-    Store16Fn store16;
-    Store8Fn store8;
+    LoadFn load;
+    StoreFn store;
 } MemoryRegion;
 
-static void route_gpu_store32(Interconnect* inter, u32 offset, u32 val);
+static void route_gpu_store(Interconnect* inter,
+                            u32 offset,
+                            u32 val,
+                            AccessWidth width);
 
 static const u32 REGION_MASK[8] = {
     0xffffffff, // KUSEG
@@ -42,8 +40,10 @@ u32 mask_region(u32 addr) {
 
 static bool memory_region_contains(const MemoryRegion* region,
                                    u32 addr,
+                                   AccessWidth width,
                                    u32* offset) {
-    if (addr >= region->start && addr - region->start < region->size) {
+    if (addr >= region->start
+        && addr - region->start <= region->size - (u32)width) {
         *offset = addr - region->start;
         return true;
     }
@@ -51,18 +51,23 @@ static bool memory_region_contains(const MemoryRegion* region,
     return false;
 }
 
-static u32 route_bios_load32(Interconnect* inter, u32 offset) {
-    return bios_load32(&inter->bios, offset);
+static u32 route_bios_load(Interconnect* inter,
+                           u32 offset,
+                           AccessWidth width) {
+    return bios_load(&inter->bios, offset, width);
 }
 
-static u8 route_bios_load8(Interconnect* inter, u32 offset) {
-    return bios_load8(&inter->bios, offset);
-}
-
-static void route_memcontrol_store32(Interconnect* inter,
-                                     u32 offset,
-                                     u32 val) {
+static void route_memcontrol_store(Interconnect* inter,
+                                   u32 offset,
+                                   u32 val,
+                                   AccessWidth width) {
     (void)inter;
+
+    if (width != ACCESS_WORD) {
+        fprintf(stderr, "MEMCONTROL does not support %s stores\n",
+                access_width_name(width));
+        exit(EXIT_FAILURE);
+    }
 
     switch (offset) {
         case 0:
@@ -91,73 +96,47 @@ static void route_memcontrol_store32(Interconnect* inter,
     }
 }
 
-static void route_ram_store32(Interconnect* inter,
-                              u32 offset,
-                              u32 val) {
-    ram_store32(&inter->ram, offset, val);
+static u32 route_ram_load(Interconnect* inter,
+                          u32 offset,
+                          AccessWidth width) {
+    return ram_load(&inter->ram, offset, width);
 }
 
-static void route_ram_store16(Interconnect* inter,
-                              u32 offset,
-                              u16 val) {
-    ram_store16(&inter->ram, offset, val);
+static void route_ram_store(Interconnect* inter,
+                            u32 offset,
+                            u32 val,
+                            AccessWidth width) {
+    ram_store(&inter->ram, offset, val, width);
 }
 
-static u32 route_ram_load32(Interconnect* inter,
-                            u32 offset) {
-    return ram_load32(&inter->ram, offset);
-}
-
-static u16 route_ram_load16(Interconnect* inter, u32 offset) {
-    return ram_load16(&inter->ram, offset);
-}
-
-static u8 route_ram_load8(Interconnect* inter, u32 offset) {
-    return ram_load8(&inter->ram, offset);
-}
-
-static void route_ram_store8(Interconnect* inter, u32 offset, u8 val) {
-    ram_store8(&inter->ram, offset, val);
-}
-
-static void route_ramsize_store32(Interconnect* inter,
-                                  u32 offset,
-                                  u32 val) {
+static void route_ramsize_store(Interconnect* inter,
+                                u32 offset,
+                                u32 val,
+                                AccessWidth width) {
     (void)inter;
     (void)offset;
     (void)val;
+    (void)width;
 }
 
-static u32 route_irqcontrol_load32(Interconnect* inter,
-                                     u32 offset) {
+static u32 route_irqcontrol_load(Interconnect* inter,
+                                 u32 offset,
+                                 AccessWidth width) {
     (void)inter;
-    fprintf(stderr, "IRQ control read at offset 0x%08x",
-            offset);
+    fprintf(stderr, "IRQ control %s read at offset 0x%08x\n",
+            access_width_name(width), offset);
     return 0;
 }
 
-static void route_irqcontrol_store32(Interconnect* inter,
-                                     u32 offset,
-                                     u32 val) {
+static void route_irqcontrol_store(Interconnect* inter,
+                                   u32 offset,
+                                   u32 val,
+                                   AccessWidth width) {
     (void)inter;
     fprintf(stderr,
-            "Ignoring write to IRQ control register at offset 0x%x: 0x%08x\n",
-            offset,
-            val);
-}
-
-static u16 route_irqcontrol_load16(Interconnect* inter, u32 offset) {
-    (void)inter;
-    fprintf(stderr, "IRQ control read at offset 0x%x\n", offset);
-    return 0;
-}
-
-static void route_irqcontrol_store16(Interconnect* inter,
-                                     u32 offset,
-                                     u16 val) {
-    (void)inter;
-    fprintf(stderr,
-            "Ignoring write to IRQ control register at offset 0x%x: 0x%04x\n",
+            "Ignoring %s write to IRQ control register at offset 0x%x: "
+            "0x%08x\n",
+            access_width_name(width),
             offset,
             val);
 }
@@ -194,12 +173,15 @@ static void interconnect_do_dma_block(Interconnect* inter, DmaPort port) {
 
         if (gpu_upload) {
             // A block sent through GPU channel 2 is a stream of GP0 commands.
-            route_gpu_store32(inter, 0, ram_load32(&inter->ram, ram_addr));
+            route_gpu_store(inter,
+                            0,
+                            ram_load(&inter->ram, ram_addr, ACCESS_WORD),
+                            ACCESS_WORD);
         } else {
             u32 word = words == 1
                 ? 0x00ffffff
                 : (addr - 4) & 0x001fffff;
-            ram_store32(&inter->ram, ram_addr, word);
+            ram_store(&inter->ram, ram_addr, word, ACCESS_WORD);
         }
 
         addr += increment;
@@ -225,12 +207,15 @@ static void interconnect_do_dma_linked_list(Interconnect* inter,
     u32 nodes = 0;
 
     for (;;) {
-        u32 header = ram_load32(&inter->ram, addr);
+        u32 header = ram_load(&inter->ram, addr, ACCESS_WORD);
         u32 words = header >> 24;
 
         while (words > 0) {
             addr = (addr + 4) & 0x001ffffc;
-            route_gpu_store32(inter, 0, ram_load32(&inter->ram, addr));
+            route_gpu_store(inter,
+                            0,
+                            ram_load(&inter->ram, addr, ACCESS_WORD),
+                            ACCESS_WORD);
             --words;
         }
 
@@ -262,7 +247,15 @@ static void interconnect_do_dma(Interconnect* inter, DmaPort port) {
     interconnect_do_dma_block(inter, port);
 }
 
-static u32 route_dma_load32(Interconnect* inter, u32 offset) {
+static u32 route_dma_load(Interconnect* inter,
+                          u32 offset,
+                          AccessWidth width) {
+    if (width != ACCESS_WORD) {
+        fprintf(stderr, "DMA does not support %s loads\n",
+                access_width_name(width));
+        exit(EXIT_FAILURE);
+    }
+
     u32 major = (offset & 0x70) >> 4;
     u32 minor = offset & 0xf;
 
@@ -285,9 +278,16 @@ static u32 route_dma_load32(Interconnect* inter, u32 offset) {
     exit(EXIT_FAILURE);
 }
 
-static void route_dma_store32(Interconnect* inter,
-                              u32 offset,
-                              u32 val) {
+static void route_dma_store(Interconnect* inter,
+                            u32 offset,
+                            u32 val,
+                            AccessWidth width) {
+    if (width != ACCESS_WORD) {
+        fprintf(stderr, "DMA does not support %s stores\n",
+                access_width_name(width));
+        exit(EXIT_FAILURE);
+    }
+
     u32 major = (offset & 0x70) >> 4;
     u32 minor = offset & 0xf;
 
@@ -338,7 +338,15 @@ static void route_dma_store32(Interconnect* inter,
     exit(EXIT_FAILURE);
 }
 
-static u32 route_gpu_load32(Interconnect* inter, u32 offset) {
+static u32 route_gpu_load(Interconnect* inter,
+                          u32 offset,
+                          AccessWidth width) {
+    if (width != ACCESS_WORD) {
+        fprintf(stderr, "GPU does not support %s loads\n",
+                access_width_name(width));
+        exit(EXIT_FAILURE);
+    }
+
     fprintf(stderr, "GPU read at offset 0x%x\n", offset);
     switch (offset) {
         case 0:
@@ -351,9 +359,16 @@ static u32 route_gpu_load32(Interconnect* inter, u32 offset) {
     }
 }
 
-static void route_gpu_store32(Interconnect* inter,
-                              u32 offset,
-                              u32 val) {
+static void route_gpu_store(Interconnect* inter,
+                            u32 offset,
+                            u32 val,
+                            AccessWidth width) {
+    if (width != ACCESS_WORD) {
+        fprintf(stderr, "GPU does not support %s stores\n",
+                access_width_name(width));
+        exit(EXIT_FAILURE);
+    }
+
     fprintf(stderr,
             "GPU write at offset 0x%x: 0x%08x\n",
             offset,
@@ -376,72 +391,125 @@ static void route_gpu_store32(Interconnect* inter,
     }
 }
 
-static void route_cachecontrol_store32(Interconnect* inter,
-                                       u32 offset,
-                                       u32 val) {
+static u32 route_cdrom_load(Interconnect* inter,
+                            u32 offset,
+                            AccessWidth width) {
+    (void)inter;
+
+    if (width != ACCESS_BYTE) {
+        fprintf(stderr, "CD-ROM does not support %s loads\n",
+                access_width_name(width));
+        exit(EXIT_FAILURE);
+    }
+
+    // Temporary CD-ROM placeholder. Bits 3 and 4 report an empty parameter
+    // FIFO that is ready to accept another byte.
+    if (offset == 0) {
+        return 0x18;
+    }
+
+    fprintf(stderr,
+            "Ignoring read from CD-ROM register at offset 0x%x\n",
+            offset);
+    return 0;
+}
+
+static void route_cdrom_store(Interconnect* inter,
+                              u32 offset,
+                              u32 val,
+                              AccessWidth width) {
+    (void)inter;
+    if (width != ACCESS_BYTE) {
+        fprintf(stderr, "CD-ROM does not support %s stores\n",
+                access_width_name(width));
+        exit(EXIT_FAILURE);
+    }
+    fprintf(stderr,
+            "Ignoring write to CD-ROM register at offset 0x%x: 0x%02x\n",
+            offset,
+            val);
+}
+
+static void route_cachecontrol_store(Interconnect* inter,
+                                     u32 offset,
+                                     u32 val,
+                                     AccessWidth width) {
     (void)inter;
     (void)offset;
     (void)val;
+    if (width != ACCESS_WORD) {
+        fprintf(stderr, "CACHECONTROL does not support %s stores\n",
+                access_width_name(width));
+        exit(EXIT_FAILURE);
+    }
     fprintf(stderr, "Ignoring write to CACHECONTROL\n");
 }
 
-static void route_spu_store16(Interconnect* inter,
-                              u32 offset,
-                              u16 val) {
+static void route_spu_store(Interconnect* inter,
+                            u32 offset,
+                            u32 val,
+                            AccessWidth width) {
     (void)inter;
     fprintf(stderr,
-            "Ignoring write to SPU register at offset 0x%03x: 0x%04x\n",
+            "Ignoring %s write to SPU register at offset 0x%03x: 0x%08x\n",
+            access_width_name(width),
             offset,
             val);
 }
 
-static u16 route_spu_load16(Interconnect* inter, u32 offset) {
+static u32 route_spu_load(Interconnect* inter,
+                          u32 offset,
+                          AccessWidth width) {
     (void)inter;
     fprintf(stderr,
-            "Ignoring read from SPU register at offset 0x%03x\n",
+            "Ignoring %s read from SPU register at offset 0x%03x\n",
+            access_width_name(width),
             offset);
     return 0;
 }
 
-static u32 route_timers_load32(Interconnect* inter, u32 offset) {
+static u32 route_timers_load(Interconnect* inter,
+                             u32 offset,
+                             AccessWidth width) {
     (void)inter;
     fprintf(stderr,
-            "Ignoring read from timer register at offset 0x%02x\n",
+            "Ignoring %s read from timer register at offset 0x%02x\n",
+            access_width_name(width),
             offset);
     return 0;
 }
 
-static void route_timers_store16(Interconnect* inter,
-                                 u32 offset,
-                                 u16 val) {
+static void route_timers_store(Interconnect* inter,
+                               u32 offset,
+                               u32 val,
+                               AccessWidth width) {
     (void)inter;
     fprintf(stderr,
-            "Ignoring write to timer register at offset 0x%02x: 0x%04x\n",
+            "Ignoring %s write to timer register at offset 0x%02x: 0x%08x\n",
+            access_width_name(width),
             offset,
             val);
 }
 
-static void route_timers_store32(Interconnect* inter,
-                                 u32 offset,
-                                 u32 val) {
-    (void)inter;
-    fprintf(stderr,
-            "Ignoring write to timer register at offset 0x%02x: 0x%08x\n",
-            offset,
-            val);
-}
-
-static u8 route_expansion_1_load8(Interconnect* inter, u32 offset) {
+static u32 route_expansion_1_load(Interconnect* inter,
+                                  u32 offset,
+                                  AccessWidth width) {
     (void)inter;
     (void)offset;
+    (void)width;
     // expansion not implemented
-    return 0xff;
+    return 0xffffffff;
 }
 
-static void route_expansion_2_store8(Interconnect* inter, u32 offset, u8 val) {
+static void route_expansion_2_store(Interconnect* inter,
+                                    u32 offset,
+                                    u32 val,
+                                    AccessWidth width) {
     (void)inter;
     fprintf(stderr,
-            "Ignoring write to expansion 2 memory map at offset 0x%03x: 0x%04x\n",
+            "Ignoring %s write to expansion 2 memory map at offset 0x%03x: "
+            "0x%08x\n",
+            access_width_name(width),
             offset,
             val);
 }
@@ -450,269 +518,165 @@ static const MemoryRegion MEMORY_MAP[] = {
     {
         .start = 0x1fc00000,
         .size = BIOS_SIZE,
-        .load32 = route_bios_load32,
-        .load8 = route_bios_load8,
-        .store32 = NULL
+        .load = route_bios_load
     },
     {
         .start = 0x1f801000,
         .size = 36,
-        .load32 = NULL,
-        .store32 = route_memcontrol_store32
+        .store = route_memcontrol_store
     },
     {
         .start = 0x00000000,
         .size = RAM_SIZE,
-        .load32 = route_ram_load32,
-        .load16 = route_ram_load16,
-        .load8 = route_ram_load8,
-        .store32 = route_ram_store32,
-        .store16 = route_ram_store16,
-        .store8 = route_ram_store8
+        .load = route_ram_load,
+        .store = route_ram_store
     },
     {
         .start = 0x1f801060,
         .size = 4,
-        .load32 = NULL,
-        .store32 = route_ramsize_store32
+        .store = route_ramsize_store
     },
     {
         .start = 0x1f801070,
         .size = 8,
-        .load32 = route_irqcontrol_load32,
-        .load16 = route_irqcontrol_load16,
-        .store32 = route_irqcontrol_store32,
-        .store16 = route_irqcontrol_store16
+        .load = route_irqcontrol_load,
+        .store = route_irqcontrol_store
     },
     {
         .start = 0x1f801080,
         .size = 0x80,
-        .load32 = route_dma_load32,
-        .store32 = route_dma_store32
+        .load = route_dma_load,
+        .store = route_dma_store
     },
     {
         .start = 0x1f801810,
         .size = 8,
-        .load32 = route_gpu_load32,
-        .store32 = route_gpu_store32
+        .load = route_gpu_load,
+        .store = route_gpu_store
+    },
+    {
+        .start = 0x1f801800,
+        .size = 4,
+        .load = route_cdrom_load,
+        .store = route_cdrom_store
     },
     {
         .start = 0xfffe0130,
         .size = 4,
-        .load32 = NULL,
-        .store32 = route_cachecontrol_store32
+        .store = route_cachecontrol_store
     },
     {
         .start = 0x1f801c00,
         .size = 640,
-        .load32 = NULL,
-        .load16 = route_spu_load16,
-        .store32 = NULL,
-        .store16 = route_spu_store16
+        .load = route_spu_load,
+        .store = route_spu_store
     },
     {
         .start = 0x1f801100,
         .size = 0x30,
-        .load32 = route_timers_load32,
-        .store32 = route_timers_store32,
-        .store16 = route_timers_store16
+        .load = route_timers_load,
+        .store = route_timers_store
     },
     {
         .start = 0x1f000000,
         .size = 512 * 1024,
-        .load8 = route_expansion_1_load8
+        .load = route_expansion_1_load
     },
     {
         .start = 0x1f802000,
         .size = 66,
-        .store8 = route_expansion_2_store8
+        .store = route_expansion_2_store
     }
 };
 
 #define MEMORY_MAP_SIZE (sizeof(MEMORY_MAP) / sizeof(MEMORY_MAP[0]))
 
-void interconnect_init(Interconnect* inter, const Bios* bios) {
+bool interconnect_init(Interconnect* inter, const Bios* bios) {
     memset(inter, 0, sizeof(Interconnect));
     inter->bios = *bios;
     ram_init(&inter->ram);
     dma_init(&inter->dma);
-    gpu_init(&inter->gpu);
+    return gpu_init(&inter->gpu);
 }
 
-u32 interconnect_load32(Interconnect* inter, u32 addr) {
-    if (addr % 4 != 0) {
-        fprintf(stderr, "Unaligned load32 address: 0x%08x\n", addr);
+void interconnect_destroy(Interconnect* inter) {
+    gpu_destroy(&inter->gpu);
+}
+
+u32 interconnect_load(Interconnect* inter, u32 addr, AccessWidth width) {
+    if (access_width_mask(width) == 0) {
+        fprintf(stderr, "Invalid interconnect load width: %u\n", (u32)width);
+        exit(EXIT_FAILURE);
+    }
+    if (addr % (u32)width != 0) {
+        fprintf(stderr, "Unaligned %s load address: 0x%08x\n",
+                access_width_name(width), addr);
         exit(EXIT_FAILURE);
     }
 
     u32 physical_addr = mask_region(addr);
-
     for (size_t i = 0; i < MEMORY_MAP_SIZE; ++i) {
         const MemoryRegion* region = &MEMORY_MAP[i];
         u32 offset;
 
-        if (memory_region_contains(region, physical_addr, &offset)) {
-            if (region->load32 == NULL) {
+        if (memory_region_contains(region, physical_addr, width, &offset)) {
+            if (region->load == NULL) {
                 fprintf(stderr,
-                        "Region at 0x%08x does not support load32\n",
-                        region->start);
+                        "Region at 0x%08x does not support %s loads\n",
+                        region->start,
+                        access_width_name(width));
                 exit(EXIT_FAILURE);
             }
 
-            return region->load32(inter, offset);
+            return region->load(inter, offset, width)
+                & access_width_mask(width);
         }
     }
 
     fprintf(stderr,
-            "Unhandled load32 address: 0x%08x (physical: 0x%08x)\n",
-            addr,
-            physical_addr);
+            "Unhandled %s load address: 0x%08x (physical: 0x%08x)\n",
+            access_width_name(width), addr, physical_addr);
     exit(EXIT_FAILURE);
 }
 
-void interconnect_store32(Interconnect* inter, u32 addr, u32 val) {
-    if (addr % 4 != 0) {
-        fprintf(stderr, "Unaligned store32 address: 0x%08x\n", addr);
+void interconnect_store(Interconnect* inter,
+                        u32 addr,
+                        u32 val,
+                        AccessWidth width) {
+    if (access_width_mask(width) == 0) {
+        fprintf(stderr, "Invalid interconnect store width: %u\n", (u32)width);
+        exit(EXIT_FAILURE);
+    }
+    if (addr % (u32)width != 0) {
+        fprintf(stderr, "Unaligned %s store address: 0x%08x\n",
+                access_width_name(width), addr);
         exit(EXIT_FAILURE);
     }
 
     u32 physical_addr = mask_region(addr);
-
     for (size_t i = 0; i < MEMORY_MAP_SIZE; ++i) {
         const MemoryRegion* region = &MEMORY_MAP[i];
         u32 offset;
 
-        if (memory_region_contains(region, physical_addr, &offset)) {
-            if (region->store32 == NULL) {
+        if (memory_region_contains(region, physical_addr, width, &offset)) {
+            if (region->store == NULL) {
                 fprintf(stderr,
-                        "Region at 0x%08x does not support store32\n",
-                        region->start);
+                        "Region at 0x%08x does not support %s stores\n",
+                        region->start,
+                        access_width_name(width));
                 exit(EXIT_FAILURE);
             }
 
-            region->store32(inter, offset, val);
+            region->store(inter,
+                          offset,
+                          val & access_width_mask(width),
+                          width);
             return;
         }
     }
 
     fprintf(stderr,
-            "Unhandled store32 address: 0x%08x (physical: 0x%08x)\n",
-            addr,
-            physical_addr);
-    exit(EXIT_FAILURE);
-}
-
-void interconnect_store16(Interconnect* inter, u32 addr, u16 val) {
-    if (addr % 2 != 0) {
-        fprintf(stderr, "Unaligned store16 address: 0x%08x\n", addr);
-        exit(EXIT_FAILURE);
-    }
-
-    u32 physical_addr = mask_region(addr);
-
-    for (size_t i = 0; i < MEMORY_MAP_SIZE; ++i) {
-        const MemoryRegion* region = &MEMORY_MAP[i];
-        u32 offset;
-
-        if (memory_region_contains(region, physical_addr, &offset)) {
-            if (region->store16 == NULL) {
-                fprintf(stderr,
-                        "Region at 0x%08x does not support store16\n",
-                        region->start);
-                exit(EXIT_FAILURE);
-            }
-
-            region->store16(inter, offset, val);
-            return;
-        }
-    }
-
-    fprintf(stderr,
-            "Unhandled store16 address: 0x%08x\n",
-            addr);
-    exit(EXIT_FAILURE);
-}
-
-void interconnect_store8(Interconnect* inter, u32 addr, u8 val) {
-    u32 physical_addr = mask_region(addr);
-
-    for (size_t i = 0; i < MEMORY_MAP_SIZE; ++i) {
-        const MemoryRegion* region = &MEMORY_MAP[i];
-        u32 offset;
-
-        if (memory_region_contains(region, physical_addr, &offset)) {
-            if (region->store8 == NULL) {
-                fprintf(stderr,
-                        "Region at 0x%08x does not support store8\n",
-                        region->start);
-                exit(EXIT_FAILURE);
-            }
-
-            region->store8(inter, offset, val);
-            return;
-        }
-    }
-
-    fprintf(stderr,
-            "Unhandled store8 address: 0x%08x (physical: 0x%08x)\n",
-            addr,
-            physical_addr);
-    exit(EXIT_FAILURE);
-}
-
-u8 interconnect_load8(Interconnect* inter, u32 addr) {
-    u32 physical_addr = mask_region(addr);
-
-    for (size_t i = 0; i < MEMORY_MAP_SIZE; ++i) {
-        const MemoryRegion* region = &MEMORY_MAP[i];
-        u32 offset;
-
-        if (memory_region_contains(region, physical_addr, &offset)) {
-            if (region->load8 == NULL) {
-                fprintf(stderr,
-                        "Region at 0x%08x does not support load8\n",
-                        region->start);
-                exit(EXIT_FAILURE);
-            }
-
-            return region->load8(inter, offset);
-        }
-    }
-
-    fprintf(stderr,
-            "Unhandled load8 address: 0x%08x (physical: 0x%08x)\n",
-            addr,
-            physical_addr);
-    exit(EXIT_FAILURE);
-}
-
-u16 interconnect_load16(Interconnect* inter, u32 addr) {
-    if (addr % 2 != 0) {
-        fprintf(stderr, "Unaligned load16 address: 0x%08x\n", addr);
-        exit(EXIT_FAILURE);
-    }
-
-    u32 physical_addr = mask_region(addr);
-
-    for (size_t i = 0; i < MEMORY_MAP_SIZE; ++i) {
-        const MemoryRegion* region = &MEMORY_MAP[i];
-        u32 offset;
-
-        if (memory_region_contains(region, physical_addr, &offset)) {
-            if (region->load16 == NULL) {
-                fprintf(stderr,
-                        "Region at 0x%08x does not support load16\n",
-                        region->start);
-                exit(EXIT_FAILURE);
-            }
-
-            return region->load16(inter, offset);
-        }
-    }
-
-    fprintf(stderr,
-            "Unhandled load16 address: 0x%08x (physical: 0x%08x)\n",
-            addr,
-            physical_addr);
+            "Unhandled %s store address: 0x%08x (physical: 0x%08x)\n",
+            access_width_name(width), addr, physical_addr);
     exit(EXIT_FAILURE);
 }

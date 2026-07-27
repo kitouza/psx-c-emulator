@@ -11,7 +11,6 @@ typedef struct {
 } Bios;
 
 bool bios_init(Bios* bios, const char* filename);
-u8 bios_load8(const Bios* bios, u32 offset);
-u32 bios_load32(const Bios* bios, u32 offset);
+u32 bios_load(const Bios* bios, u32 offset, AccessWidth width);
 
 #endif

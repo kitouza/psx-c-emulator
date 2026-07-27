@@ -22,20 +22,10 @@ bool bios_init(Bios* bios, const char* filename) {
 
 }
 
-u8 bios_load8(const Bios* bios, u32 offset) {
-    return bios->data[offset];
-}
-
-u32 bios_load32(const Bios* bios, u32 offset) {
-
-    // Grab 4 individual bytes from data array
-    u8 b0 = bios->data[offset + 0];
-    u8 b1 = bios->data[offset + 1];
-    u8 b2 = bios->data[offset + 2];
-    u8 b3 = bios->data[offset + 3];
-
-    // Arrange into 32 bit little-endian word
-
-    return (u32)b0 | ((u32)b1 << 8) | ((u32)b2 << 16) | ((u32)b3 << 24);
-
+u32 bios_load(const Bios* bios, u32 offset, AccessWidth width) {
+    u32 val = 0;
+    for (u32 i = 0; i < (u32)width; ++i) {
+        val |= (u32)bios->data[offset + i] << (i * 8);
+    }
+    return val;
 }
