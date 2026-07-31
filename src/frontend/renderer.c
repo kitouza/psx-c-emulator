@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include "debug_ui.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -440,19 +441,32 @@ bool renderer_display(Renderer* renderer) {
     return true;
 }
 
-bool renderer_handle_events(Renderer* renderer) {
-    (void)renderer;
+bool renderer_handle_events(Renderer* renderer, DebugUi* debug_ui) {
     SDL_Event event;
 
     while (SDL_PollEvent(&event)) {
+        debug_ui_handle_event(debug_ui, &event);
         if (event.type == SDL_EVENT_QUIT
+            || (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED
+                && event.window.windowID == SDL_GetWindowID(renderer->window))
             || (event.type == SDL_EVENT_KEY_DOWN
+                && event.key.windowID == SDL_GetWindowID(renderer->window)
                 && event.key.key == SDLK_ESCAPE)) {
             return false;
+        }
+        if (event.type == SDL_EVENT_KEY_DOWN
+            && event.key.key == SDLK_PAUSE) {
+            renderer->debug_pause_requested = true;
         }
     }
 
     return true;
+}
+
+bool renderer_take_debug_pause(Renderer* renderer) {
+    bool requested = renderer->debug_pause_requested;
+    renderer->debug_pause_requested = false;
+    return requested;
 }
 
 void renderer_destroy(Renderer* renderer) {

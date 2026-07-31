@@ -1,4 +1,4 @@
-.PHONY: all configure build run clean
+.PHONY: all configure build run debug clean
 
 BUILD_DIR := build
 TARGET := $(BUILD_DIR)/psx-emulator
@@ -12,7 +12,10 @@ build: configure
 	cmake --build $(BUILD_DIR)
 
 run: build
-	./$(TARGET)
+	./$(TARGET) $(ARGS)
+
+debug: build
+	./$(TARGET) --debug-ui
 
 clean:
 	cmake -E remove_directory $(BUILD_DIR)

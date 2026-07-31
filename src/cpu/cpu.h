@@ -5,13 +5,16 @@
 #include "interconnect.h"
 #include "types.h"
 
+typedef struct Debugger Debugger;
+
 typedef struct {
     RegisterIndex reg;
     u32 value;
 } PendingLoad;
 
-typedef struct {
+typedef struct Cpu {
     Interconnect* inter;
+    Debugger* debugger;
     u32 pc;
     u32 next_pc;
     u32 current_pc;
@@ -22,6 +25,7 @@ typedef struct {
     PendingLoad load;
     u32 sr;
     u32 cause;
+    u32 badvaddr;
     u32 epc;
     u32 hi;
     u32 lo;
@@ -37,10 +41,12 @@ typedef enum {
     EXCEPTION_OVERFLOW = 0xc
 } Exception;
 
-void cpu_init(Cpu* cpu, Interconnect* inter);
-void cpu_run_next_instruction(Cpu* cpu);
+void cpu_init(Cpu* cpu, Interconnect* inter, Debugger* debugger);
+bool cpu_run_next_instruction(Cpu* cpu);
 u32 cpu_load(Cpu* cpu, u32 addr, AccessWidth width);
 void cpu_store(Cpu* cpu, u32 addr, u32 val, AccessWidth width);
+bool cpu_examine(const Cpu* cpu, u32 addr, AccessWidth width, u32* value);
+bool cpu_deposit(Cpu* cpu, u32 addr, AccessWidth width, u32 value);
 u32 load_reg(Cpu* cpu, RegisterIndex index);
 void set_reg(Cpu* cpu, RegisterIndex index, u32 val);
 void branch(Cpu* cpu, u32 offset);

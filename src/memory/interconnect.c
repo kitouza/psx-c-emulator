@@ -603,6 +603,111 @@ void interconnect_destroy(Interconnect* inter) {
     gpu_destroy(&inter->gpu);
 }
 
+static bool examine_dma(const Dma* dma, u32 offset, u32* value) {
+    u32 major = (offset & 0x70) >> 4;
+    u32 minor = offset & 0xf;
+
+    if (major <= 6) {
+        const DmaChannel* channel = dma_channel(dma, (DmaPort)major);
+        switch (minor & ~3u) {
+            case 0: *value = dma_channel_base(channel); return true;
+            case 4: *value = dma_channel_block_control(channel); return true;
+            case 8: *value = dma_channel_control(channel); return true;
+        }
+    } else if (major == 7) {
+        switch (minor & ~3u) {
+            case 0: *value = dma_control(dma); return true;
+            case 4: *value = dma_interrupt(dma); return true;
+        }
+    }
+    return false;
+}
+
+bool interconnect_examine(const Interconnect* inter,
+                          u32 addr,
+                          AccessWidth width,
+                          u32* value) {
+    if (value == NULL || access_width_mask(width) == 0
+        || addr % (u32)width != 0) {
+        return false;
+    }
+
+    u32 physical_addr = mask_region(addr);
+    u32 raw = 0;
+    u32 byte_offset = 0;
+
+    if (physical_addr < RAM_SIZE
+        && physical_addr <= RAM_SIZE - (u32)width) {
+        *value = ram_load(&inter->ram, physical_addr, width);
+        return true;
+    }
+    if (physical_addr >= 0x1fc00000
+        && physical_addr - 0x1fc00000 <= BIOS_SIZE - (u32)width) {
+        *value = bios_load(&inter->bios,
+                           physical_addr - 0x1fc00000,
+                           width);
+        return true;
+    }
+
+    // Device registers are snapshotted as words and narrowed to the byte(s)
+    // GDB requested. None of these helpers mutate emulated hardware state.
+    if (physical_addr >= 0x1f801080 && physical_addr < 0x1f801100) {
+        u32 aligned = (physical_addr - 0x1f801080) & ~3u;
+        if (!examine_dma(&inter->dma, aligned, &raw)) return false;
+        byte_offset = physical_addr & 3;
+    } else if (physical_addr >= 0x1f801810
+               && physical_addr < 0x1f801818) {
+        u32 reg = (physical_addr - 0x1f801810) & ~3u;
+        raw = reg == 0 ? gpu_read(&inter->gpu) : gpu_status(&inter->gpu);
+        byte_offset = physical_addr & 3;
+    } else if (physical_addr >= 0x1f801800
+               && physical_addr < 0x1f801804) {
+        if (width != ACCESS_BYTE) return false;
+        *value = physical_addr == 0x1f801800 ? 0x18 : 0;
+        return true;
+    } else if ((physical_addr >= 0x1f801070
+                && physical_addr < 0x1f801078)
+               || (physical_addr >= 0x1f801100
+                   && physical_addr < 0x1f801130)
+               || (physical_addr >= 0x1f801c00
+                   && physical_addr < 0x1f801e80)) {
+        // These devices currently expose placeholder zero-valued state.
+        *value = 0;
+        return true;
+    } else if (physical_addr >= 0x1f000000
+               && physical_addr < 0x1f080000) {
+        *value = access_width_mask(width);
+        return true;
+    } else {
+        // Write-only, unimplemented, or unmapped state cannot be examined.
+        return false;
+    }
+
+    if (byte_offset + (u32)width > sizeof(u32)) return false;
+    *value = (raw >> (byte_offset * 8)) & access_width_mask(width);
+    return true;
+}
+
+bool interconnect_deposit(Interconnect* inter,
+                          u32 addr,
+                          u32 value,
+                          AccessWidth width) {
+    if (access_width_mask(width) == 0 || addr % (u32)width != 0) {
+        return false;
+    }
+
+    u32 physical_addr = mask_region(addr);
+    if (physical_addr >= RAM_SIZE
+        || physical_addr > RAM_SIZE - (u32)width) {
+        return false;
+    }
+
+    // Debugger writes are deliberately RAM-only: writing through normal
+    // device callbacks could start DMA or submit GPU commands unexpectedly.
+    ram_store(&inter->ram, physical_addr, value, width);
+    return true;
+}
+
 u32 interconnect_load(Interconnect* inter, u32 addr, AccessWidth width) {
     if (access_width_mask(width) == 0) {
         fprintf(stderr, "Invalid interconnect load width: %u\n", (u32)width);

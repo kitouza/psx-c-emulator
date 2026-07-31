@@ -1,13 +1,15 @@
 #include "cpu.h"
+#include "debugger.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 // initialize clean cpu
-void cpu_init(Cpu* cpu, Interconnect* inter) {
+void cpu_init(Cpu* cpu, Interconnect* inter, Debugger* debugger) {
     memset(cpu, 0, sizeof(Cpu)); // zero out cpu structure
 
     cpu->inter = inter; // borrow the interconnect; do not copy BIOS or RAM
+    cpu->debugger = debugger;
     cpu->pc = 0xbfc00000; // PC reset value at beginning of BIOS
     cpu->next_pc = cpu->pc + 4;
 
@@ -30,7 +32,11 @@ void cpu_init(Cpu* cpu, Interconnect* inter) {
     };
 }
 
-void cpu_run_next_instruction(Cpu* cpu) {
+bool cpu_run_next_instruction(Cpu* cpu) {
+    if (!debugger_before_instruction(cpu->debugger, cpu->pc)) {
+        return false;
+    }
+
     cpu->current_pc = cpu->pc;
 
     // A branch affects the instruction after its delay slot.
@@ -38,12 +44,14 @@ void cpu_run_next_instruction(Cpu* cpu) {
     cpu->branch = false;
 
     if (cpu->current_pc % 4 != 0) {
+        cpu->badvaddr = cpu->current_pc;
         cpu_exception(cpu, EXCEPTION_LOADADDRESSERROR);
-        return;
+        debugger_after_instruction(cpu->debugger, cpu->current_pc);
+        return true;
     }
 
     Instruction instruction = (Instruction){
-        cpu_load(cpu, cpu->pc, ACCESS_WORD)
+        interconnect_load(cpu->inter, cpu->pc, ACCESS_WORD)
     };
 
     // Keep one PC ahead so branches execute the following delay-slot instruction.
@@ -64,11 +72,14 @@ void cpu_run_next_instruction(Cpu* cpu) {
 
     // Make this instruction's output visible to the next instruction.
     memcpy(cpu->regs, cpu->out_regs, sizeof(cpu->regs));
+    debugger_after_instruction(cpu->debugger, cpu->current_pc);
+    return true;
 }
 
 // store/load funcs
 
 u32 cpu_load(Cpu* cpu, u32 addr, AccessWidth width) {
+    debugger_memory_read(cpu->debugger, addr);
     return interconnect_load(cpu->inter, addr, width);
 }
 
@@ -78,7 +89,16 @@ void cpu_store(Cpu* cpu, u32 addr, u32 val, AccessWidth width) {
         return;
     }
 
+    debugger_memory_write(cpu->debugger, addr);
     interconnect_store(cpu->inter, addr, val, width);
+}
+
+bool cpu_examine(const Cpu* cpu, u32 addr, AccessWidth width, u32* value) {
+    return interconnect_examine(cpu->inter, addr, width, value);
+}
+
+bool cpu_deposit(Cpu* cpu, u32 addr, AccessWidth width, u32 value) {
+    return interconnect_deposit(cpu->inter, addr, value, width);
 }
 // register funcs
 
@@ -260,6 +280,11 @@ void op_lw(Cpu* cpu, Instruction instruction) {
     RegisterIndex s = instruction_s(instruction);
 
     u32 addr = load_reg(cpu, s) + i;
+    if (addr % 4 != 0) {
+        cpu->badvaddr = addr;
+        cpu_exception(cpu, EXCEPTION_LOADADDRESSERROR);
+        return;
+    }
     u32 v = cpu_load(cpu, addr, ACCESS_WORD);
 
     cpu->load = (PendingLoad){
@@ -346,6 +371,7 @@ void op_lh(Cpu* cpu, Instruction instruction) {
     u32 addr = load_reg(cpu, s) + i;
 
     if (addr % 2 != 0) {
+        cpu->badvaddr = addr;
         cpu_exception(cpu, EXCEPTION_LOADADDRESSERROR);
         return;
     }
@@ -364,6 +390,7 @@ void op_lhu(Cpu* cpu, Instruction instruction) {
 
     u32 addr = load_reg(cpu, s) + i;
     if (addr % 2 != 0) {
+        cpu->badvaddr = addr;
         cpu_exception(cpu, EXCEPTION_LOADADDRESSERROR);
         return;
     }
@@ -383,6 +410,11 @@ void op_sw(Cpu* cpu, Instruction instruction) {
     u32 addr = load_reg(cpu, s) + i;
     u32 v = load_reg(cpu, t);
 
+    if (addr % 4 != 0) {
+        cpu->badvaddr = addr;
+        cpu_exception(cpu, EXCEPTION_STOREADDRESSERROR);
+        return;
+    }
     cpu_store(cpu, addr, v, ACCESS_WORD);
 }
 
@@ -438,6 +470,11 @@ void op_sh(Cpu* cpu, Instruction instruction) {
     u32 addr = load_reg(cpu, s) + i;
     u16 v = (u16)load_reg(cpu, t);
 
+    if (addr % 2 != 0) {
+        cpu->badvaddr = addr;
+        cpu_exception(cpu, EXCEPTION_STOREADDRESSERROR);
+        return;
+    }
     cpu_store(cpu, addr, v, ACCESS_HALFWORD);
 }
 

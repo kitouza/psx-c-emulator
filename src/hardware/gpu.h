@@ -60,7 +60,7 @@ typedef enum {
     GPU_COMMAND_MASK_BIT_SETTING
 } GpuCommand;
 
-typedef struct {
+typedef struct Gpu {
     u8 page_base_x;
     u8 page_base_y;
     u8 semi_transparency;

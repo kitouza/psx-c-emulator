@@ -13,6 +13,8 @@
 
 #include "types.h"
 
+typedef struct DebugUi DebugUi;
+
 enum {
     RENDERER_WIDTH = 1024,
     RENDERER_HEIGHT = 512,
@@ -36,7 +38,7 @@ typedef struct {
     size_t element_size;
 } RendererBuffer;
 
-typedef struct {
+typedef struct Renderer {
     SDL_Window* window;
     SDL_GLContext gl_context;
     GLuint vertex_shader;
@@ -47,6 +49,7 @@ typedef struct {
     RendererBuffer colors;
     u32 vertex_count;
     bool initialized;
+    bool debug_pause_requested;
 } Renderer;
 
 bool renderer_init(Renderer* renderer);
@@ -58,7 +61,8 @@ bool renderer_push_quad(Renderer* renderer,
                         const Color colors[4]);
 bool renderer_draw(Renderer* renderer);
 bool renderer_display(Renderer* renderer);
-bool renderer_handle_events(Renderer* renderer);
+bool renderer_handle_events(Renderer* renderer, DebugUi* debug_ui);
+bool renderer_take_debug_pause(Renderer* renderer);
 void renderer_destroy(Renderer* renderer);
 
 #endif

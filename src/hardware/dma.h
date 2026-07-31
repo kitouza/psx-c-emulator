@@ -44,7 +44,7 @@ typedef struct {
     u8 dummy;
 } DmaChannel;
 
-typedef struct {
+typedef struct Dma {
     u32 control;
     bool irq_enable;
     u8 channel_irq_enable;

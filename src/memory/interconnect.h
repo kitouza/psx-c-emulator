@@ -18,6 +18,14 @@ bool interconnect_init(Interconnect* inter, const Bios* bios);
 void interconnect_destroy(Interconnect* inter);
 u32 mask_region(u32 addr);
 u32 interconnect_load(Interconnect* inter, u32 addr, AccessWidth width);
+bool interconnect_examine(const Interconnect* inter,
+                          u32 addr,
+                          AccessWidth width,
+                          u32* value);
+bool interconnect_deposit(Interconnect* inter,
+                          u32 addr,
+                          u32 value,
+                          AccessWidth width);
 void interconnect_store(Interconnect* inter,
                         u32 addr,
                         u32 val,
